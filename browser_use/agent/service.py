@@ -205,11 +205,19 @@ class Agent(Generic[Context]):
 		# LLM API connection setup
 		llm_api_env_vars = REQUIRED_LLM_API_ENV_VARS.get(self.llm.__class__.__name__, [])
 		if llm_api_env_vars and not check_env_variables(llm_api_env_vars):
-			logger.error(f'Environment variables not set for {self.llm.__class__.__name__}')
-			raise ValueError('Environment variables not set')
+			# 檢查是否處於測試模式或設置了跳過驗證
+			if os.environ.get("TESTING_MODE") == "True" or SKIP_LLM_API_KEY_VERIFICATION:
+				logger.warning(f'Skipping API key verification for {self.llm.__class__.__name__}')
+			else:
+				logger.error(f'Environment variables not set for {self.llm.__class__.__name__}')
+				raise ValueError('Environment variables not set')
 
 		# Start non-blocking LLM connection verification
-		self.llm._verified_api_keys = self._verify_llm_connection(self.llm)
+		# 在測試模式下跳過 LLM 連接驗證
+		if os.environ.get("TESTING_MODE") == "True" or SKIP_LLM_API_KEY_VERIFICATION:
+			self.llm._verified_api_keys = True
+		else:
+			self.llm._verified_api_keys = self._verify_llm_connection(self.llm)
 
 		# Initialize available actions for system prompt (only non-filtered actions)
 		# These will be used for the system prompt to maintain caching

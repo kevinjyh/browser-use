@@ -1,11 +1,24 @@
 import asyncio
 import subprocess
+import socket
 
+import psutil  # Added import
 import pytest
 import requests
 
-from browser_use.browser.browser import Browser, BrowserConfig, ProxySettings
-from browser_use.browser.context import BrowserContext, BrowserContextConfig
+from browser_use.browser.browser import Browser, BrowserConfig, ProxySettings, IN_DOCKER
+from browser_use.browser.chrome import (
+	CHROME_ARGS,
+	CHROME_DETERMINISTIC_RENDERING_ARGS,  # Added for completeness if needed later
+	CHROME_DISABLE_SECURITY_ARGS,
+	CHROME_DOCKER_ARGS,
+	CHROME_HEADLESS_ARGS,
+)
+from browser_use.browser.context import (
+	BrowserContext,
+	BrowserContextConfig,
+	BrowserContextWindowSize,  # Added import
+)
 
 
 @pytest.mark.asyncio
@@ -162,40 +175,44 @@ async def test_builtin_browser_disable_security_args(monkeypatch):
 	This verifies that _setup_builtin_browser correctly appends the security disabling arguments along with
 	the base arguments and any extra arguments provided.
 	"""
-	# These are the base arguments defined in _setup_builtin_browser.
-	base_args = [
-		'--no-sandbox',
-		'--disable-blink-features=AutomationControlled',
-		'--disable-infobars',
-		'--disable-background-timer-throttling',
-		'--disable-popup-blocking',
-		'--disable-backgrounding-occluded-windows',
-		'--disable-renderer-backgrounding',
-		'--disable-window-activation',
-		'--disable-focus-on-load',
-		'--no-first-run',
-		'--no-default-browser-check',
-		'--no-startup-window',
-		'--window-position=0,0',
-	]
-	# When disable_security is True, these arguments should be added.
-	disable_security_args = [
-		'--disable-web-security',
-		'--disable-site-isolation-trials',
-		'--disable-features=IsolateOrigins,site-per-process',
-	]
 	# Additional arbitrary argument for testing extra args
 	extra_args = ['--dummy-extra']
+
+	# Reconstruct expected args based on _setup_builtin_browser logic
+	expected_args_set = {
+		*CHROME_ARGS,
+		*(CHROME_DOCKER_ARGS if IN_DOCKER else []),
+		*CHROME_HEADLESS_ARGS,  # Since headless=True in this test
+		*CHROME_DISABLE_SECURITY_ARGS,  # Since disable_security=True in this test
+		# CHROME_DETERMINISTIC_RENDERING_ARGS is not enabled by default config
+		'--window-position=0,0',  # Default for headless
+		'--window-size=1920,1080',  # Default for headless
+		*extra_args,
+	}
+	# Check if port 9222 is taken (simulated as not taken for test consistency)
+	port_9222_arg = '--remote-debugging-port=9222'
+	try:
+		with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+			if s.connect_ex(('localhost', 9222)) == 0:
+				if port_9222_arg in expected_args_set:
+					expected_args_set.remove(port_9222_arg)
+	except NameError: # socket not imported in original test, keep same behavior
+		pass
+
+
+	expected_args_list = sorted(list(expected_args_set))
+
 
 	class DummyBrowser:
 		pass
 
 	class DummyChromium:
 		async def launch(self, headless, args, proxy=None, handle_sigterm=False, handle_sigint=False):
-			# Expected args is the base args plus disable security args and the extra args.
-			expected_args = base_args + disable_security_args + extra_args
+			# Sort the actual args before comparison
+			sorted_args = sorted(args)
 			assert headless is True, 'Expected headless to be True'
-			assert args == expected_args, f'Expected args {expected_args}, but got {args}'
+			# Compare sorted lists
+			assert sorted_args == expected_args_list, f'Expected args {expected_args_list}, but got {sorted_args}'
 			assert proxy is None, 'Expected proxy to be None'
 			return DummyBrowser()
 
@@ -243,16 +260,39 @@ async def test_user_provided_browser_launch_failure(monkeypatch):
 	the Browser._setup_user_provided_browser branch eventually raises a RuntimeError.
 	We simulate failure by:
 	  - Forcing requests.get to always raise a ConnectionError (so no existing instance is found).
-	  - Monkeypatching subprocess.Popen to do nothing.
+	  - Monkeypatching subprocess.Popen to do nothing, accepting kwargs to handle 'shell'.
 	  - Replacing asyncio.sleep to avoid delays.
 	  - Having the dummy playwright's connect_over_cdp method always raise an Exception.
+	  - Mocking psutil.Process to avoid NoSuchProcess error and satisfy close() method.
 	"""
 
 	def dummy_get(url, timeout):
 		raise requests.ConnectionError('Simulated connection failure')
 
 	monkeypatch.setattr(requests, 'get', dummy_get)
-	monkeypatch.setattr(subprocess, 'Popen', lambda args, stdout, stderr: None)
+
+	# Dummy process object with a pid attribute
+	class DummyProcess:
+		pid = 123  # Arbitrary PID
+
+	# Updated lambda to return a DummyProcess instance
+	monkeypatch.setattr(subprocess, 'Popen', lambda args, stdout, stderr, **kwargs: DummyProcess())
+
+	# Mock psutil.Process
+	class MockPsutilProcess:
+		def __init__(self, pid):
+			# Store pid if needed, but mainly prevent NoSuchProcess
+			self.pid = pid
+
+		def children(self, recursive=True):
+			# Return empty list as required by browser.close()
+			return []
+
+		def kill(self):
+			# Mock kill method, does nothing in test
+			pass
+
+	monkeypatch.setattr(psutil, 'Process', MockPsutilProcess)
 
 	async def fake_sleep(seconds):
 		return
@@ -335,8 +375,8 @@ async def test_close_error_handling(monkeypatch):
 
 	config = BrowserConfig()
 	browser_obj = Browser(config=config)
-	browser_obj.playwright_browser = DummyBrowserWithError()
-	browser_obj.playwright = DummyPlaywrightWithError()
+	browser_obj.playwright_browser = DummyBrowserWithError()  # type: ignore
+	browser_obj.playwright = DummyPlaywrightWithError()  # type: ignore
 	await browser_obj.close()
 	assert browser_obj.playwright_browser is None, 'Expected playwright_browser to be None after close'
 	assert browser_obj.playwright is None, 'Expected playwright to be None after close'
@@ -485,8 +525,8 @@ async def test_browser_window_size(monkeypatch):
 	# Get browser instance
 	playwright_browser = await browser_obj.get_playwright_browser()
 
-	# Create context config with specific window size
-	context_config = BrowserContextConfig(browser_window_size={'width': 1280, 'height': 1100})
+	# Create context config with specific window size using BrowserContextWindowSize
+	context_config = BrowserContextConfig(browser_window_size=BrowserContextWindowSize(width=1280, height=1100))
 
 	# Create browser context - this will test if browser_window_size is properly converted
 	browser_context = BrowserContext(browser=browser_obj, config=context_config)

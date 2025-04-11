@@ -34,6 +34,9 @@ dependencies = [
     "psutil>=7.0.0",
     "faiss-cpu>=1.10.0",
     "mem0ai==0.1.88",
+    "pytest (>=8.3.5,<9.0.0)",
+    "sentence-transformers (>=4.0.2,<5.0.0)",
+    "pytest-asyncio (>=0.26.0,<0.27.0)",
 ]
 
 # botocore: only needed for Bedrock Claude boto3 examples/models/bedrock_claude.py 

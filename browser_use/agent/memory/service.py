@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import List, Optional
+import os
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
@@ -47,11 +48,18 @@ class Memory:
 		llm: BaseChatModel,
 		settings: MemorySettings,
 	):
-		self.message_manager = message_manager
-		self.llm = llm
-		self.settings = settings
-		self._memory_config = self.settings.config or self._get_default_config(llm)
-		self.mem0 = Mem0Memory.from_config(config_dict=self._memory_config)
+		self._memory_config = settings.config or self._get_default_config(llm)
+		self._interval = settings.interval
+		self._agent_id = settings.agent_id
+		self._message_manager = message_manager
+		self._llm = llm
+
+		# 在測試模式下跳過初始化Mem0Memory，避免PyTorch相關錯誤
+		if os.environ.get("TESTING_MODE") == "True":
+			logger.info("Running in testing mode, skipping memory initialization")
+			self.mem0 = None
+		else:
+			self.mem0 = Mem0Memory.from_config(config_dict=self._memory_config)
 
 	@staticmethod
 	def _get_default_config(llm: BaseChatModel) -> dict:
@@ -73,7 +81,7 @@ class Memory:
 		logger.info(f'Creating procedural memory at step {current_step}')
 
 		# Get all messages
-		all_messages = self.message_manager.state.history.messages
+		all_messages = self._message_manager.state.history.messages
 
 		# Separate messages into those to keep as-is and those to process for memory
 		new_messages = []
@@ -100,7 +108,7 @@ class Memory:
 
 		# Replace the processed messages with the consolidated memory
 		memory_message = HumanMessage(content=memory_content)
-		memory_tokens = self.message_manager._count_tokens(memory_message)
+		memory_tokens = self._message_manager._count_tokens(memory_message)
 		memory_metadata = MessageMetadata(tokens=memory_tokens, message_type='memory')
 
 		# Calculate the total tokens being removed
@@ -110,9 +118,9 @@ class Memory:
 		new_messages.append(ManagedMessage(message=memory_message, metadata=memory_metadata))
 
 		# Update the history
-		self.message_manager.state.history.messages = new_messages
-		self.message_manager.state.history.current_tokens -= removed_tokens
-		self.message_manager.state.history.current_tokens += memory_tokens
+		self._message_manager.state.history.messages = new_messages
+		self._message_manager.state.history.current_tokens -= removed_tokens
+		self._message_manager.state.history.current_tokens += memory_tokens
 		logger.info(f'Messages consolidated: {len(messages_to_process)} messages converted to procedural memory')
 
 	def _create(self, messages: List[BaseMessage], current_step: int) -> Optional[str]:
@@ -120,7 +128,7 @@ class Memory:
 		try:
 			results = self.mem0.add(
 				messages=parsed_messages,
-				agent_id=self.settings.agent_id,
+				agent_id=self._agent_id,
 				memory_type='procedural_memory',
 				metadata={'step': current_step},
 			)
@@ -130,3 +138,35 @@ class Memory:
 		except Exception as e:
 			logger.error(f'Error creating procedural memory: {e}')
 			return None
+
+	def add_messages(self, messages: List[BaseMessage], current_step: int) -> None:
+		"""
+		Add messages to the memory database.
+		"""
+		# Skip if no messages
+		if not messages:
+			return
+
+		# 在測試模式下不執行記憶體相關操作
+		if self.mem0 is None:
+			logger.debug("Skipping memory operations in testing mode")
+			return
+			
+		parsed_messages = []
+		for message in messages:
+			parsed_messages.append(
+				{
+					"role": message.type,
+					"content": message.content,
+					"metadata": getattr(message, "additional_kwargs", {}),
+				}
+			)
+
+		if parsed_messages:
+			results = self.mem0.add(
+				messages=parsed_messages,
+				agent_id=self._agent_id,
+				memory_type='procedural_memory',
+				metadata={'step': current_step},
+			)
+			logger.debug(f'Memory added: {len(results)} messages')

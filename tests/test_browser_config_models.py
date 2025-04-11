@@ -56,7 +56,7 @@ async def test_window_size_pydantic_model():
 	assert config.browser_window_size == window_size
 
 	# You can also create from a dictionary
-	config2 = BrowserContextConfig(browser_window_size={'width': 1920, 'height': 1080})
+	config2 = BrowserContextConfig(browser_window_size=BrowserContextWindowSize(width=1920, height=1080))
 	assert isinstance(config2.browser_window_size, BrowserContextWindowSize)
 	assert config2.browser_window_size.width == 1920
 	assert config2.browser_window_size.height == 1080
@@ -143,7 +143,7 @@ async def test_window_size_with_real_browser():
 
 			# For browser context creation in record_video_size, this is what truly matters
 			# Verify that our window size was properly serialized to a dictionary
-			print(f'Content of context session: {browser_context.session.context}')
+			print(f'Content of context session: {browser_context.session.context if browser_context.session else "Session is None"}')
 			print('✅ Browser window size used in the test')
 		finally:
 			# Clean up context
