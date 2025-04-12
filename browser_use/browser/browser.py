@@ -100,7 +100,7 @@ class BrowserConfig(BaseModel):
 	cdp_url: str | None = None
 
 	browser_class: Literal['chromium', 'firefox', 'webkit'] = 'chromium'
-	browser_binary_path: str | None = Field(default=None, alias=AliasChoices('browser_instance_path', 'chrome_instance_path'))
+	browser_binary_path: str | None = Field(default=None, validation_alias=AliasChoices('browser_instance_path', 'chrome_instance_path'))
 	extra_browser_args: list[str] = Field(default_factory=list)
 
 	headless: bool = False
@@ -133,7 +133,7 @@ class Browser:
 
 	async def new_context(self, config: BrowserContextConfig | None = None) -> BrowserContext:
 		"""Create a browser context"""
-		return BrowserContext(config=config or self.config, browser=self)
+		return BrowserContext(config=config or self.config.new_context_config, browser=self)
 
 	async def get_playwright_browser(self) -> PlaywrightBrowser:
 		"""Get a browser context"""

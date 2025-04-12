@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, TypedDict
 
 from playwright._impl._errors import TimeoutError
 from playwright.async_api import Browser as PlaywrightBrowser
@@ -175,14 +175,18 @@ class BrowserContextConfig(BaseModel):
 	viewport_expansion: int = 0
 	allowed_domains: list[str] | None = None
 	include_dynamic_attributes: bool = True
-	http_credentials: dict[str, str] | None = None
+	http_credentials: "HttpCredentials | None" = None
 
 	keep_alive: bool = Field(default=False, alias='_force_keep_context_alive')  # used to be called _force_keep_context_alive
 	is_mobile: bool | None = None
 	has_touch: bool | None = None
-	geolocation: dict | None = None
+	geolocation: "Geolocation | None" = None
 	permissions: list[str] | None = None
 	timezone_id: str | None = None
+
+# Define the TypedDict matching Playwright's expectation
+HttpCredentials = TypedDict('HttpCredentials', {'username': str, 'password': str})
+Geolocation = TypedDict('Geolocation', {'latitude': float, 'longitude': float, 'accuracy': float}, total=False)
 
 
 class BrowserSession:
@@ -436,13 +440,16 @@ class BrowserContext:
 				bypass_csp=self.config.disable_security,
 				ignore_https_errors=self.config.disable_security,
 				record_video_dir=self.config.save_recording_path,
-				record_video_size=self.config.browser_window_size.model_dump(),
+				record_video_size={
+					"width": self.config.browser_window_size.width,
+					"height": self.config.browser_window_size.height,
+				} if self.config.browser_window_size else None,
 				record_har_path=self.config.save_har_path,
 				locale=self.config.locale,
-				http_credentials=self.config.http_credentials,
+				http_credentials=self.config.http_credentials, # type: ignore
 				is_mobile=self.config.is_mobile,
 				has_touch=self.config.has_touch,
-				geolocation=self.config.geolocation,
+				geolocation=self.config.geolocation, # type: ignore
 				permissions=self.config.permissions,
 				timezone_id=self.config.timezone_id,
 			)
